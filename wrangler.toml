@@ -1,5 +1,5 @@
 
-name = "minimal-image-gateway"
+name = "swu-image-gateway"
 main = "src/worker.ts"
 compatibility_date = "2025-01-15"  # use today's or latest supported date
 workers_dev = true

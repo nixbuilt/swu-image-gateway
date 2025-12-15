@@ -1,6 +1,6 @@
 
 {
-  "name": "minimal-image-gateway",
+  "name": "swu-image-gateway",
   "private": true,
   "type": "module",
   "scripts": {
