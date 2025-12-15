@@ -1,0 +1,10 @@
+
+name = "minimal-image-gateway"
+main = "src/worker.ts"
+compatibility_date = "2025-01-15"  # use today's or latest supported date
+workers_dev = true
+
+# Bindings: define secrets via wrangler CLI (not in the file)
+# You’ll set APP_TOKEN_SECRET with wrangler secret put APP_TOKEN_SECRET.
+
+
