@@ -5,6 +5,16 @@ compatibility_date = "2025-01-15"  # use today's or latest supported date
 workers_dev = true
 
 # Bindings: define secrets via wrangler CLI (not in the file)
-# You’ll set APP_TOKEN_SECRET with wrangler secret put APP_TOKEN_SECRET.
+[[r2_buckets]]
+binding = "BUCKET"           # this will be env.BUCKET in code
+bucket_name = "sor"
+
+[vars]
+APP_TOKEN_SECRET = "replace-with-a-long-random-string"
+# Optional: add a prefix within the bucket where your assets live, e.g. "public/"
+BUCKET_PREFIX = "public/"
 
 
+[[routes]]
+pattern = "api.datapadswu.com"
+custom_domain = true

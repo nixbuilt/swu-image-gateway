@@ -1,10 +1,13 @@
 
 export interface Env {
   APP_TOKEN_SECRET: string;
+  BUCKET: R2Bucket;
+  BUCKET_PREFIX?: string; // optional: e.g. "public/"
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // // --- 1) Token check exactly as you had ---
     // const token = request.headers.get("X-App-Token");
     // if (!token) return new Response("Unauthorized: missing X-App-Token", { status: 401 });
 
@@ -19,40 +22,65 @@ export default {
     // if (Math.abs(now - ts) > WINDOW_SECONDS) return new Response("Token expired", { status: 403 });
 
     // const enc = new TextEncoder();
-    // const key = await crypto.subtle.importKey(
+    // const keyHmac = await crypto.subtle.importKey(
     //   "raw",
     //   enc.encode(env.APP_TOKEN_SECRET),
     //   { name: "HMAC", hash: "SHA-256" },
     //   false,
     //   ["sign"]
     // );
-    // const sigBuf = await crypto.subtle.sign("HMAC", key, enc.encode(tsStr));
+    // const sigBuf = await crypto.subtle.sign("HMAC", keyHmac, enc.encode(tsStr));
     // const expectedB64url = toBase64Url(new Uint8Array(sigBuf));
 
     // if (!timingSafeEqual(sigB64url, expectedB64url)) {
     //   return new Response("Invalid signature", { status: 403 });
     // }
 
+    // --- 2) Only allow images, same logic you had ---
     const url = new URL(request.url);
     const isImage =
       /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(url.pathname) ||
       (request.headers.get("accept") || "").includes("image/");
     if (!isImage) return new Response("Forbidden: not an image resource", { status: 403 });
 
-    // Strip X-App-Token before proxying
-    const upstream = await fetch(new Request(request, {
-      headers: stripHeaders(request.headers, ["X-App-Token"]),
-    }));
+    // --- 3) Map URL path -> R2 key ---
+    const pathKey = url.pathname.replace(/^\/+/, "");
+    if (!pathKey) return new Response("Missing object key", { status: 400 });
 
-    const headers = new Headers(upstream.headers);
+    const key = (env.BUCKET_PREFIX ?? "") + pathKey;
+
+    // --- 4) Read object from R2 ---
+    const object = await env.BUCKET.get(key);
+    if (!object) return new Response("Not Found", { status: 404 });
+
+    // --- 5) Build response headers ---
+    const headers = new Headers();
+    const contentType = object.httpMetadata?.contentType ?? inferContentTypeFromExt(key);
+    headers.set("Content-Type", contentType);
+
+    // Default cache policy; tune as needed
     if (!headers.has("Cache-Control")) {
       headers.set("Cache-Control", "public, max-age=3600, immutable");
     }
 
-    return new Response(upstream.body, { status: upstream.status, headers });
+    // Preserve ETag / timestamps for client caching
+    if (object.httpEtag) headers.set("ETag", object.httpEtag);
+    headers.set("Last-Modified", object.uploaded.toUTCString());
+
+    // HEAD support (no body)
+    if (request.method === "HEAD") {
+      return new Response(null, { status: 200, headers });
+    }
+    if (request.method !== "GET") {
+      return new Response("Method Not Allowed", { status: 405, headers: { Allow: "GET, HEAD" } });
+    }
+
+    // --- 6) Stream body back to client ---
+    return new Response(object.body, { status: 200, headers });
   },
 };
 
+// --- helpers identical to your original, plus a tiny content-type inference ---
 function toBase64Url(bytes: Uint8Array): string {
   let base64 = btoa(String.fromCharCode(...bytes));
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
@@ -65,13 +93,16 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-function stripHeaders(orig: Headers, toRemove: string[]): Headers {
-  const removeLower = toRemove.map(r => r.toLowerCase());
-  const h = new Headers();
-  orig.forEach((value, key) => {
-    if (!removeLower.includes(key.toLowerCase())) {
-      h.set(key, value);
-       }
-  });
-  return h;
+// crude fallback if httpMetadata.contentType isn't set
+function inferContentTypeFromExt(key: string): string {
+  const ext = (key.split(".").pop() || "").toLowerCase();
+  switch (ext) {
+    case "png": return "image/png";
+    case "jpg": case "jpeg": return "image/jpeg";
+    case "gif": return "image/gif";
+    case "webp": return "image/webp";
+    case "avif": return "image/avif";
+    case "svg": return "image/svg+xml";
+       default: return "application/octet-stream";
+  }
 }
