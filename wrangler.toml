@@ -12,7 +12,7 @@ bucket_name = "sor"
 [vars]
 APP_TOKEN_SECRET = "replace-with-a-long-random-string"
 # Optional: add a prefix within the bucket where your assets live, e.g. "public/"
-BUCKET_PREFIX = "public/"
+# BUCKET_PREFIX = "public/"
 
 
 [[routes]]
