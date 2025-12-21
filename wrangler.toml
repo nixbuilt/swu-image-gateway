@@ -7,7 +7,7 @@ workers_dev = true
 # Bindings: define secrets via wrangler CLI (not in the file)
 [[r2_buckets]]
 binding = "BUCKET"           # this will be env.BUCKET in code
-bucket_name = "images"
+bucket_name = "datapad-swu/images"
 
 [vars]
 APP_TOKEN_SECRET = "replace-with-a-long-random-string"
