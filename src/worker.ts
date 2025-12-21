@@ -36,12 +36,12 @@ export default {
     //   return new Response("Invalid signature", { status: 403 });
     // }
 
-    // // --- 2) Only allow images, same logic you had ---
-    // const url = new URL(request.url);
-    // const isImage =
-    //   /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(url.pathname) ||
-    //   (request.headers.get("accept") || "").includes("image/");
-    // if (!isImage) return new Response("Forbidden: not an image resource", { status: 403 });
+    // --- 2) Only allow images, same logic you had ---
+    const url = new URL(request.url);
+    const isImage =
+      /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(url.pathname) ||
+      (request.headers.get("accept") || "").includes("image/");
+    if (!isImage) return new Response("Forbidden: not an image resource", { status: 403 });
 
     // --- 3) Map URL path -> R2 key ---
     const pathKey = url.pathname.replace(/^\/+/, "");
