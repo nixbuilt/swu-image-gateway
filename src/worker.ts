@@ -40,7 +40,7 @@ export default {
     const url = new URL(request.url);
     const isImage =
       /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(url.pathname) ||
-      (request.headers.get("accept") || "").includes("image/");
+      (request.headers.get("accept") || "").includes("images/");
     if (!isImage) return new Response("Forbidden: not an image resource", { status: 403 });
 
     // --- 3) Map URL path -> R2 key ---
