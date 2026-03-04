@@ -7,7 +7,7 @@ export interface Env {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    // --- 1) Token check exactly as you had ---
+    // --- 1) Token check ---
     const token = request.headers.get("X-App-Token");
     if (!token) return new Response("Unauthorized: missing X-App-Token", { status: 401 });
 
@@ -31,26 +31,82 @@ export default {
     );
     const sigBuf = await crypto.subtle.sign("HMAC", keyHmac, enc.encode(tsStr));
     const expectedB64url = toBase64Url(new Uint8Array(sigBuf));
-
     if (!timingSafeEqual(sigB64url, expectedB64url)) {
       return new Response("Invalid signature", { status: 403 });
     }
 
-    // --- 2) Only allow images, same logic you had ---
+    // --- 2) Only allow images ---
     const url = new URL(request.url);
     const isImage =
       /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(url.pathname) ||
       (request.headers.get("accept") || "").includes("images/");
     if (!isImage) return new Response("Forbidden: not an image resource", { status: 403 });
 
-    // --- 3) Map URL path -> R2 key ---
-    const pathKey = url.pathname.replace(/^\/+/, "");
+    // --- 3) Map URL -> R2 key (with md/ sharding) ---
+    function normalizeKey(path: string) {
+      return path.replace(/^\/+/, "").replace(/\.\.+/g, "");
+    }
+
+    function computeShard(filename: string) {
+      // Normalize to lowercase just for consistency in storage layout
+      const base = filename.toLowerCase();
+      if (/^[a-z]/.test(base)) {
+        return base.slice(0, 3); // e.g., p25 from p2502001.jpg
+      }
+      // defaults to numeric-first: first 2 chars
+      return base.slice(0, 2);   // e.g., 01 from 0101001.jpg
+    }
+
+    const pathKey = normalizeKey(url.pathname);
     if (!pathKey) return new Response("Missing object key", { status: 400 });
 
-    const key = (env.BUCKET_PREFIX ?? "") + pathKey;
+    // Example incoming: cards/images/md/0101001.jpg
+    // We only shard under .../md/ ; everything else stays as-is.
+    let bucketKey: string;
+
+    // Try to match ".../cards/images/md/<filename>"
+    const mdMatch = pathKey.match(/^(cards\/images\/md)\/([^\/]+)$/i);
+    if (mdMatch) {
+      const basePath = mdMatch[1];        // "cards/images/md"
+      const filename = mdMatch[2];        // "0101001.jpg" or "p2502001.jpg"
+      const shard = computeShard(filename.replace(/\.[^.]+$/, "")); // compute from name w/o extension
+      bucketKey = `${basePath}/${shard}/${filename}`; // e.g., cards/images/md/01/0101001.jpg
+    } else {
+      // Non-md paths are unchanged
+      bucketKey = pathKey;
+    }
+
+    const key = (env.BUCKET_PREFIX ?? "") + bucketKey;
 
     // --- 4) Read object from R2 ---
-    const object = await env.BUCKET.get(key);
+    let object = await env.BUCKET.get(key);
+
+    // Optional: migration fallback — if sharded not found, try legacy flat path
+    if (!object && mdMatch) {
+      const legacyKey = (env.BUCKET_PREFIX ?? "") + `${mdMatch[1]}/${mdMatch[2]}`;
+      object = await env.BUCKET.get(legacyKey);
+      if (object) {
+        // Encourage moving clients/CDN toward the sharded object quickly
+        // (You can remove these headers once migration is done.)
+        const headers = new Headers();
+        const contentType = object.httpMetadata?.contentType ?? inferContentTypeFromExt(legacyKey);
+        headers.set("Content-Type", contentType);
+        headers.set("Cache-Control", "public, max-age=60"); // short cache during migration
+        if (object.httpEtag) headers.set("ETag", object.httpEtag);
+        headers.set("Last-Modified", object.uploaded.toUTCString());
+        headers.set("X-Storage-Path", "legacy-flat"); // debug signal
+
+        if (request.method === "HEAD") {
+          return new Response(null, { status: 200, headers });
+        }
+        if (request.method !== "GET") {
+          return new Response("Method Not Allowed", { status: 405, headers: { Allow: "GET, HEAD" } });
+        }
+
+        return new Response(object.body, { status: 200, headers });
+      }
+    }
+
     if (!object) return new Response("Not Found", { status: 404 });
 
     // --- 5) Build response headers ---
@@ -58,16 +114,14 @@ export default {
     const contentType = object.httpMetadata?.contentType ?? inferContentTypeFromExt(key);
     headers.set("Content-Type", contentType);
 
-    // Default cache policy; tune as needed
     if (!headers.has("Cache-Control")) {
       headers.set("Cache-Control", "public, max-age=3600, immutable");
     }
 
-    // Preserve ETag / timestamps for client caching
     if (object.httpEtag) headers.set("ETag", object.httpEtag);
     headers.set("Last-Modified", object.uploaded.toUTCString());
+    headers.set("X-Storage-Path", "sharded"); // debug signal
 
-    // HEAD support (no body)
     if (request.method === "HEAD") {
       return new Response(null, { status: 200, headers });
     }
@@ -80,29 +134,26 @@ export default {
   },
 };
 
-// --- helpers identical to your original, plus a tiny content-type inference ---
+// --- helpers you already had (or similar) ---
 function toBase64Url(bytes: Uint8Array): string {
   let base64 = btoa(String.fromCharCode(...bytes));
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function timingSafeEqual(a: string, b: string): boolean {
+function timingSafeEqual(a: string, b: string) {
   if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+  let out = 0;
+  for (let i = 0; i < a.length; i++) out |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return out === 0;
 }
 
-// crude fallback if httpMetadata.contentType isn't set
 function inferContentTypeFromExt(key: string): string {
-  const ext = (key.split(".").pop() || "").toLowerCase();
-  switch (ext) {
-    case "png": return "image/png";
-    case "jpg": case "jpeg": return "image/jpeg";
-    case "gif": return "image/gif";
-    case "webp": return "image/webp";
-    case "avif": return "image/avif";
-    case "svg": return "image/svg+xml";
-       default: return "application/octet-stream";
-  }
+  const lower = key.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".avif")) return "image/avif";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  return "application/octet-stream";
 }
