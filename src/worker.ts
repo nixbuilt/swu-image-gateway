@@ -48,12 +48,17 @@ export default {
     }
 
     function computeShard(filename: string) {
-      // derive shard from base name (no extension)
       const base = filename.toLowerCase();
-      if (/^[a-z]/.test(base)) {
-        return base.slice(0, 3); // e.g., "p25" from "p2502001"
+      // starts with TWO letters → return first 4 chars
+      if (/^[a-z]{2}/.test(base)) {
+        return base.slice(0, 4);
       }
-      return base.slice(0, 2);   // e.g., "01" from "0101001"
+      // starts with ONE letter → return first 3 chars
+      if (/^[a-z]/.test(base)) {
+        return base.slice(0, 3);
+      }
+      // starts with non‑letter (e.g. digit) → return first 2 chars
+      return base.slice(0, 2);
     }
 
     const pathKey = normalizeKey(url.pathname);
